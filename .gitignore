@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets — never commit
+.env
+.env.local
+config.local.json
+
+# Debug output
+screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Package lock (optional — remove this line if you want to lock versions)
+package-lock.json
