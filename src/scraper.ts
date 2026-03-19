@@ -1,8 +1,8 @@
 import { getBank } from "open-banking-chile";
-import type { BankMovement, ScrapeResult } from "open-banking-chile";
+import type { BankMovement } from "open-banking-chile";
 import { generateExternalId } from "./hash";
 import { PiggiClient } from "./piggi";
-import type { BankConfig, PiggiBatchTransaction, ProductConfig } from "./types";
+import type { BankConfig, PiggiBatchTransaction } from "./types";
 
 // Map open-banking-chile bank IDs to piggi financial_entity_slug
 const BANK_SLUG_MAP: Record<string, string> = {
@@ -14,7 +14,14 @@ const BANK_SLUG_MAP: Record<string, string> = {
   itau: "banco_itau",
   santander: "banco_santander",
   scotiabank: "scotiabank",
-  edwards: "banco_de_chile" // Edwards es parte de Banco de Chile
+  edwards: "banco_de_chile"
+};
+
+// Map movement source to a human-readable product name
+const SOURCE_PRODUCT_MAP: Record<string, string> = {
+  account: "Cuenta Corriente",
+  credit_card_unbilled: "Tarjeta de Credito",
+  credit_card_billed: "Tarjeta de Credito"
 };
 
 function convertDate(dateStr: string): string {
@@ -28,14 +35,17 @@ function convertDate(dateStr: string): string {
 
 function movementToTransaction(
   movement: BankMovement,
-  product: ProductConfig
+  bankId: string,
+  source: string
 ): PiggiBatchTransaction {
   const date = convertDate(movement.date);
   const type = movement.amount < 0 ? "EXPENSE" : "INCOME";
+  // Use bankId + source as account identifier for hash uniqueness
+  const accountId = `${bankId}:${source}`;
 
   return {
     external_id: generateExternalId(
-      product.accountNumber,
+      accountId,
       date,
       movement.description,
       movement.amount,
@@ -45,6 +55,60 @@ function movementToTransaction(
     description: movement.description,
     date
   };
+}
+
+function groupBySource(
+  movements: BankMovement[]
+): Record<string, BankMovement[]> {
+  const groups: Record<string, BankMovement[]> = {};
+  for (const m of movements) {
+    const source = m.source || "account";
+    if (!groups[source]) groups[source] = [];
+    groups[source].push(m);
+  }
+  return groups;
+}
+
+async function sendChunked(
+  transactions: PiggiBatchTransaction[],
+  piggiSlug: string,
+  productName: string,
+  currency: string,
+  bankId: string,
+  piggiClient: PiggiClient
+): Promise<void> {
+  // Split into chunks of 250 (piggi max per batch)
+  const chunks = [];
+  for (let i = 0; i < transactions.length; i += 250) {
+    chunks.push(transactions.slice(i, i + 250));
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    console.log(
+      `[${bankId}] ${productName} — batch ${i + 1}/${chunks.length} (${chunk.length} txs)...`
+    );
+
+    try {
+      const response = await piggiClient.sendBatch({
+        financial_entity_slug: piggiSlug,
+        product_name: productName,
+        currency,
+        account_number: `${bankId}-auto`,
+        transactions: chunk
+      });
+
+      console.log(
+        `[${bankId}] ${productName} — ${response.processedCount} processed, ${response.duplicateCount} duplicates, ${response.errorCount} errors — ${response.status}`
+      );
+
+      if (response.failedExternalIds && response.failedExternalIds.length > 0) {
+        console.warn(`[${bankId}] Failed IDs:`, response.failedExternalIds);
+      }
+    } catch (err) {
+      console.error(`[${bankId}] Failed to send batch:`, err);
+    }
+  }
 }
 
 export async function scrapeAndSend(
@@ -63,9 +127,11 @@ export async function scrapeAndSend(
     return;
   }
 
+  const currency = bankConfig.currency || "CLP";
+
   console.log(`[${bankConfig.id}] Starting scrape...`);
 
-  let result: ScrapeResult;
+  let result;
   try {
     result = await bank.scrape({
       rut: bankConfig.credentials.rut,
@@ -73,7 +139,8 @@ export async function scrapeAndSend(
       headful: bankConfig.options?.headful,
       saveScreenshots: bankConfig.options?.saveScreenshots,
       chromePath: bankConfig.options?.chromePath,
-      onProgress: (step: string) => console.log(`  [${bankConfig.id}] ${step}`)
+      onProgress: (step: string) =>
+        console.log(`  [${bankConfig.id}] ${step}`)
     });
   } catch (err) {
     console.error(`[${bankConfig.id}] Scrape failed:`, err);
@@ -94,49 +161,27 @@ export async function scrapeAndSend(
     `[${bankConfig.id}] Found ${result.movements.length} movements`
   );
 
-  // Send one batch per product
-  for (const product of bankConfig.products) {
-    const transactions = result.movements.map((m) =>
-      movementToTransaction(m, product)
+  // Group movements by source and send one batch per product type
+  const grouped = groupBySource(result.movements);
+
+  for (const [source, movements] of Object.entries(grouped)) {
+    const productName = SOURCE_PRODUCT_MAP[source] || source;
+
+    console.log(
+      `[${bankConfig.id}] ${productName} (${source}): ${movements.length} transactions`
     );
 
-    // Split into chunks of 250 (piggi max per batch)
-    const chunks = [];
-    for (let i = 0; i < transactions.length; i += 250) {
-      chunks.push(transactions.slice(i, i + 250));
-    }
+    const transactions = movements.map((m) =>
+      movementToTransaction(m, bankConfig.id, source)
+    );
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      console.log(
-        `[${bankConfig.id}] Sending batch ${i + 1}/${chunks.length} (${chunk.length} txs)...`
-      );
-
-      try {
-        const response = await piggiClient.sendBatch({
-          financial_entity_slug: piggiSlug,
-          product_name: product.name,
-          currency: product.currency,
-          account_number: product.accountNumber,
-          transactions: chunk
-        });
-
-        console.log(
-          `[${bankConfig.id}] Batch ${response.batchId}: ${response.processedCount} processed, ${response.duplicateCount} duplicates, ${response.errorCount} errors — ${response.status}`
-        );
-
-        if (
-          response.failedExternalIds &&
-          response.failedExternalIds.length > 0
-        ) {
-          console.warn(
-            `[${bankConfig.id}] Failed IDs:`,
-            response.failedExternalIds
-          );
-        }
-      } catch (err) {
-        console.error(`[${bankConfig.id}] Failed to send batch:`, err);
-      }
-    }
+    await sendChunked(
+      transactions,
+      piggiSlug,
+      productName,
+      currency,
+      bankConfig.id,
+      piggiClient
+    );
   }
 }

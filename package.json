@@ -10,8 +10,9 @@
     "scrape": "tsx src/index.ts"
   },
   "dependencies": {
-    "open-banking-chile": "github:kaihv/open-banking-chile",
-    "node-cron": "^3.0.3"
+    "dotenv": "^17.3.1",
+    "node-cron": "^3.0.3",
+    "open-banking-chile": "github:kaihv/open-banking-chile"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

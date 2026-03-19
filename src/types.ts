@@ -5,18 +5,12 @@ export interface BankConfig {
     rut: string;
     password: string;
   };
-  products: ProductConfig[];
+  currency?: string;
   options?: {
     headful?: boolean;
     saveScreenshots?: boolean;
     chromePath?: string;
   };
-}
-
-export interface ProductConfig {
-  name: string;
-  currency: string;
-  accountNumber: string;
 }
 
 export interface PiggiConfig {
