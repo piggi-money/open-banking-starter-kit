@@ -1,0 +1,31 @@
+{
+  "piggi": {
+    "apiUrl": "https://devapi.piggi.cc",
+    "apiKey": ""
+  },
+  "schedule": {
+    "enabled": true,
+    "cron": "0 8,20 * * *"
+  },
+  "banks": [
+    {
+      "id": "banco_estado",
+      "enabled": true,
+      "credentials": {
+        "rut": "",
+        "password": ""
+      },
+      "products": [
+        {
+          "name": "Cuenta RUT",
+          "currency": "CLP",
+          "accountNumber": ""
+        }
+      ],
+      "options": {
+        "headful": false,
+        "saveScreenshots": false
+      }
+    }
+  ]
+}
